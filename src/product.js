@@ -16,15 +16,17 @@ router.get("/", verifyToken, async (req, res) => {
         const result = await db.query(
             `SELECT
                 id AS product_id,
-                name,
-                min_order_qty,
-                uom,
-                category,
-                purchase_price,
-                gst_applicable,
-                hsn_code,
-                barcode
+                organization_id,
+                branch_id,
+                product_code,
+                product_name,
+                description,
+                price,
+                cost_price,
+                created_at,
+                updated_at
              FROM products
+             WHERE is_deleted = FALSE
              ORDER BY id DESC`
         );
 
@@ -46,6 +48,60 @@ router.get("/", verifyToken, async (req, res) => {
 
 
 // =====================================================
+// GET PRODUCT BY ID
+// GET /api/products/:product_id
+// =====================================================
+
+router.get("/:product_id", verifyToken, async (req, res) => {
+
+    try {
+
+        const { product_id } = req.params;
+
+        const result = await db.query(
+            `SELECT
+                id AS product_id,
+                organization_id,
+                branch_id,
+                product_code,
+                product_name,
+                description,
+                price,
+                cost_price,
+                created_at,
+                updated_at
+             FROM products
+             WHERE id = $1
+             AND is_deleted = FALSE`,
+            [product_id]
+        );
+
+        if (result.rows.length === 0) {
+
+            return res.status(404).json({
+                success: false,
+                message: "Product not found"
+            });
+        }
+
+        res.json({
+            success: true,
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+
+        console.error("Get product error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch product"
+        });
+    }
+});
+
+
+// =====================================================
 // ADD PRODUCT
 // POST /api/products
 // =====================================================
@@ -55,14 +111,13 @@ router.post("/", verifyToken, async (req, res) => {
     try {
 
         const {
-            name,
-            min_order_qty,
-            uom,
-            category,
-            purchase_price,
-            gst_applicable,
-            hsn_code,
-            barcode
+            organization_id,
+            branch_id,
+            product_code,
+            product_name,
+            description,
+            price,
+            cost_price
         } = req.body;
 
 
@@ -70,7 +125,31 @@ router.post("/", verifyToken, async (req, res) => {
         // VALIDATION
         // -----------------------------
 
-        if (!name || !name.trim()) {
+        if (!organization_id) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Organization is required"
+            });
+        }
+
+        if (!branch_id) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Branch is required"
+            });
+        }
+
+        if (!product_code || !product_code.trim()) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Product code is required"
+            });
+        }
+
+        if (!product_name || !product_name.trim()) {
 
             return res.status(400).json({
                 success: false,
@@ -80,25 +159,73 @@ router.post("/", verifyToken, async (req, res) => {
 
 
         // -----------------------------
-        // CHECK DUPLICATE BARCODE
+        // CHECK ORGANIZATION
         // -----------------------------
 
-        if (barcode && barcode.trim()) {
+        const organizationCheck = await db.query(
+            `SELECT id
+             FROM organizations
+             WHERE id = $1
+             AND is_deleted = FALSE`,
+            [organization_id]
+        );
 
-            const barcodeCheck = await db.query(
-                `SELECT id
-                 FROM products
-                 WHERE barcode = $1`,
-                [barcode.trim()]
-            );
+        if (organizationCheck.rows.length === 0) {
 
-            if (barcodeCheck.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Organization not found"
+            });
+        }
 
-                return res.status(409).json({
-                    success: false,
-                    message: "Barcode already exists"
-                });
-            }
+
+        // -----------------------------
+        // CHECK BRANCH
+        // -----------------------------
+
+        const branchCheck = await db.query(
+            `SELECT id
+             FROM branches
+             WHERE id = $1
+             AND organization_id = $2
+             AND is_deleted = FALSE`,
+            [
+                branch_id,
+                organization_id
+            ]
+        );
+
+        if (branchCheck.rows.length === 0) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Branch not found for this organization"
+            });
+        }
+
+
+        // -----------------------------
+        // CHECK DUPLICATE PRODUCT CODE
+        // -----------------------------
+
+        const productCodeCheck = await db.query(
+            `SELECT id
+             FROM products
+             WHERE branch_id = $1
+             AND product_code = $2
+             AND is_deleted = FALSE`,
+            [
+                branch_id,
+                product_code.trim()
+            ]
+        );
+
+        if (productCodeCheck.rows.length > 0) {
+
+            return res.status(409).json({
+                success: false,
+                message: "Product code already exists in this branch"
+            });
         }
 
 
@@ -109,14 +236,13 @@ router.post("/", verifyToken, async (req, res) => {
         const result = await db.query(
             `INSERT INTO products
             (
-                name,
-                min_order_qty,
-                uom,
-                category,
-                purchase_price,
-                gst_applicable,
-                hsn_code,
-                barcode
+                organization_id,
+                branch_id,
+                product_code,
+                product_name,
+                description,
+                price,
+                cost_price
             )
             VALUES
             (
@@ -126,28 +252,27 @@ router.post("/", verifyToken, async (req, res) => {
                 $4,
                 $5,
                 $6,
-                $7,
-                $8
+                $7
             )
             RETURNING
                 id AS product_id,
-                name,
-                min_order_qty,
-                uom,
-                category,
-                purchase_price,
-                gst_applicable,
-                hsn_code,
-                barcode`,
+                organization_id,
+                branch_id,
+                product_code,
+                product_name,
+                description,
+                price,
+                cost_price,
+                created_at,
+                updated_at`,
             [
-                name.trim(),
-                min_order_qty || 1,
-                uom || null,
-                category || null,
-                purchase_price || 0,
-                gst_applicable === "No" ? false : true,
-                hsn_code || null,
-                barcode ? barcode.trim() : null
+                organization_id,
+                branch_id,
+                product_code.trim(),
+                product_name.trim(),
+                description ? description.trim() : null,
+                price || 0,
+                cost_price || 0
             ]
         );
 
@@ -182,14 +307,13 @@ router.put("/:product_id", verifyToken, async (req, res) => {
         const { product_id } = req.params;
 
         const {
-            name,
-            min_order_qty,
-            uom,
-            category,
-            purchase_price,
-            gst_applicable,
-            hsn_code,
-            barcode
+            organization_id,
+            branch_id,
+            product_code,
+            product_name,
+            description,
+            price,
+            cost_price
         } = req.body;
 
 
@@ -197,7 +321,31 @@ router.put("/:product_id", verifyToken, async (req, res) => {
         // VALIDATION
         // -----------------------------
 
-        if (!name || !name.trim()) {
+        if (!organization_id) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Organization is required"
+            });
+        }
+
+        if (!branch_id) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Branch is required"
+            });
+        }
+
+        if (!product_code || !product_code.trim()) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Product code is required"
+            });
+        }
+
+        if (!product_name || !product_name.trim()) {
 
             return res.status(400).json({
                 success: false,
@@ -213,7 +361,8 @@ router.put("/:product_id", verifyToken, async (req, res) => {
         const productCheck = await db.query(
             `SELECT id
              FROM products
-             WHERE id = $1`,
+             WHERE id = $1
+             AND is_deleted = FALSE`,
             [product_id]
         );
 
@@ -227,68 +376,114 @@ router.put("/:product_id", verifyToken, async (req, res) => {
 
 
         // -----------------------------
-        // CHECK DUPLICATE BARCODE
+        // CHECK ORGANIZATION
         // -----------------------------
 
-        if (barcode && barcode.trim()) {
+        const organizationCheck = await db.query(
+            `SELECT id
+             FROM organizations
+             WHERE id = $1
+             AND is_deleted = FALSE`,
+            [organization_id]
+        );
 
-            const barcodeCheck = await db.query(
-                `SELECT id
-                 FROM products
-                 WHERE barcode = $1
-                 AND id != $2`,
-                [
-                    barcode.trim(),
-                    product_id
-                ]
-            );
+        if (organizationCheck.rows.length === 0) {
 
-            if (barcodeCheck.rows.length > 0) {
-
-                return res.status(409).json({
-                    success: false,
-                    message: "Barcode already exists"
-                });
-            }
+            return res.status(400).json({
+                success: false,
+                message: "Organization not found"
+            });
         }
 
 
         // -----------------------------
-        // UPDATE
+        // CHECK BRANCH
+        // -----------------------------
+
+        const branchCheck = await db.query(
+            `SELECT id
+             FROM branches
+             WHERE id = $1
+             AND organization_id = $2
+             AND is_deleted = FALSE`,
+            [
+                branch_id,
+                organization_id
+            ]
+        );
+
+        if (branchCheck.rows.length === 0) {
+
+            return res.status(400).json({
+                success: false,
+                message: "Branch not found for this organization"
+            });
+        }
+
+
+        // -----------------------------
+        // CHECK DUPLICATE PRODUCT CODE
+        // -----------------------------
+
+        const productCodeCheck = await db.query(
+            `SELECT id
+             FROM products
+             WHERE branch_id = $1
+             AND product_code = $2
+             AND id != $3
+             AND is_deleted = FALSE`,
+            [
+                branch_id,
+                product_code.trim(),
+                product_id
+            ]
+        );
+
+        if (productCodeCheck.rows.length > 0) {
+
+            return res.status(409).json({
+                success: false,
+                message: "Product code already exists in this branch"
+            });
+        }
+
+
+        // -----------------------------
+        // UPDATE PRODUCT
         // -----------------------------
 
         const result = await db.query(
             `UPDATE products
              SET
-                name = $1,
-                min_order_qty = $2,
-                uom = $3,
-                category = $4,
-                purchase_price = $5,
-                gst_applicable = $6,
-                hsn_code = $7,
-                barcode = $8,
+                organization_id = $1,
+                branch_id = $2,
+                product_code = $3,
+                product_name = $4,
+                description = $5,
+                price = $6,
+                cost_price = $7,
                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $9
+             WHERE id = $8
+             AND is_deleted = FALSE
              RETURNING
                 id AS product_id,
-                name,
-                min_order_qty,
-                uom,
-                category,
-                purchase_price,
-                gst_applicable,
-                hsn_code,
-                barcode`,
+                organization_id,
+                branch_id,
+                product_code,
+                product_name,
+                description,
+                price,
+                cost_price,
+                created_at,
+                updated_at`,
             [
-                name.trim(),
-                min_order_qty || 1,
-                uom || null,
-                category || null,
-                purchase_price || 0,
-                gst_applicable === "No" ? false : true,
-                hsn_code || null,
-                barcode ? barcode.trim() : null,
+                organization_id,
+                branch_id,
+                product_code.trim(),
+                product_name.trim(),
+                description ? description.trim() : null,
+                price || 0,
+                cost_price || 0,
                 product_id
             ]
         );
@@ -313,7 +508,7 @@ router.put("/:product_id", verifyToken, async (req, res) => {
 
 
 // =====================================================
-// DELETE PRODUCT
+// DELETE PRODUCT - SOFT DELETE
 // DELETE /api/products/:product_id
 // =====================================================
 
@@ -323,10 +518,14 @@ router.delete("/:product_id", verifyToken, async (req, res) => {
 
         const { product_id } = req.params;
 
-
         const result = await db.query(
-            `DELETE FROM products
+            `UPDATE products
+             SET
+                is_deleted = TRUE,
+                deleted_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
              WHERE id = $1
+             AND is_deleted = FALSE
              RETURNING id`,
             [product_id]
         );
@@ -353,6 +552,65 @@ router.delete("/:product_id", verifyToken, async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to delete product"
+        });
+    }
+});
+
+
+// =====================================================
+// RESTORE PRODUCT
+// PUT /api/products/:product_id/restore
+// =====================================================
+
+router.put("/:product_id/restore", verifyToken, async (req, res) => {
+
+    try {
+
+        const { product_id } = req.params;
+
+        const result = await db.query(
+            `UPDATE products
+             SET
+                is_deleted = FALSE,
+                deleted_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1
+             AND is_deleted = TRUE
+             RETURNING
+                id AS product_id,
+                organization_id,
+                branch_id,
+                product_code,
+                product_name,
+                description,
+                price,
+                cost_price`,
+            [product_id]
+        );
+
+
+        if (result.rows.length === 0) {
+
+            return res.status(404).json({
+                success: false,
+                message: "Deleted product not found"
+            });
+        }
+
+
+        res.json({
+            success: true,
+            message: "Product restored successfully",
+            data: result.rows[0]
+        });
+
+    } catch (error) {
+
+        console.error("Restore product error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to restore product"
         });
     }
 });
